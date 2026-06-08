@@ -303,7 +303,7 @@ mod tests {
     fn ui_snapshot_round_trips_single_session_surface() {
         let snapshot = DesktopUiSnapshot::new(
             "single_session",
-            "Jcode".to_string(),
+            "Fusion Forge".to_string(),
             Some("session-1".to_string()),
             DesktopSurfaceSnapshot::SingleSession(DesktopSingleSessionSnapshot {
                 session_title: Some("active session".to_string()),

@@ -94,7 +94,7 @@ fn mac_hotkey_launch_agent_plist_uses_valid_xml_quotes() {
 fn paused_jcode_shell_command_keeps_failures_visible() {
     let command = paused_jcode_shell_command("/tmp/jcode");
     assert!(command.contains("Press Enter to close"));
-    assert!(command.contains("Jcode exited with status"));
+    assert!(command.contains("Fusion Forge exited with status"));
     assert!(command.contains("jcode executable not found"));
 }
 

@@ -30,7 +30,7 @@ pub fn openai_encrypted_content_is_sendable(encrypted_content: &str) -> bool {
 
 pub fn openai_encrypted_content_fallback_summary(encrypted_content_len: usize) -> String {
     format!(
-        "OpenAI native compaction state was discarded because its encrypted payload was {} chars, above Jcode's safe replay limit of {} chars (provider hard limit: {} chars). Earlier compacted details may be unavailable; use the recent visible messages and session search/tools if exact prior details are needed.",
+        "OpenAI native compaction state was discarded because its encrypted payload was {} chars, above Fusion Forge's safe replay limit of {} chars (provider hard limit: {} chars). Earlier compacted details may be unavailable; use the recent visible messages and session search/tools if exact prior details are needed.",
         encrypted_content_len,
         OPENAI_ENCRYPTED_CONTENT_SAFE_MAX_CHARS,
         OPENAI_ENCRYPTED_CONTENT_PROVIDER_MAX_CHARS,

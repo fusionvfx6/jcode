@@ -122,7 +122,7 @@ async fn run_scheduled_task_in_live_session_if_idle(
     let event_tx = session_event_fanout_sender(session_id.clone(), Arc::clone(swarm_members));
     tokio::spawn(async move {
         if let Err(err) =
-            process_message_streaming_mpsc(agent, &message, vec![], None, event_tx).await
+            process_message_streaming_mpsc(agent, &message, vec![], None, false, event_tx).await
         {
             crate::logging::error(&format!(
                 "Failed to run scheduled task immediately for live session {}: {}",
@@ -997,6 +997,7 @@ pub(super) async fn handle_agent_task(
         &task,
         vec![],
         None,
+        false,
         ctx.client_event_tx.clone(),
     )
     .await;

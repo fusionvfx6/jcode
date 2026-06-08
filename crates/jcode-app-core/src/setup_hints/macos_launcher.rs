@@ -61,9 +61,9 @@ pub(super) fn install_macos_app_launcher() -> Result<(PathBuf, MacTerminalKind)>
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Jcode</string>
+    <string>Fusion Forge</string>
     <key>CFBundleDisplayName</key>
-    <string>Jcode</string>
+    <string>Fusion Forge</string>
     <key>CFBundleIdentifier</key>
     <string>com.jcode.launcher</string>
     <key>CFBundleVersion</key>
@@ -181,11 +181,11 @@ fn macos_launcher_script(terminal: MacTerminalKind, exe_path: &str, app_dir: &Pa
     let shell_command = paused_jcode_shell_command(exe_path);
     let launch_command = launch_command_for_macos_terminal(terminal, &shell_command);
     let missing_message = escape_applescript_text(&format!(
-        "Jcode could not launch because the executable was not found.\n\nExpected path:\n{}\n\nTry reinstalling jcode or rerun:\njcode setup-launcher",
+        "Fusion Forge could not launch because the executable was not found.\n\nExpected path:\n{}\n\nTry reinstalling jcode or rerun:\njcode setup-launcher",
         exe_path
     ));
     let terminal_failure_message = escape_applescript_text(&format!(
-        "Jcode could not open {}.\n\nTry rerunning:\njcode setup-launcher\n\nLauncher log:\n~/.jcode/launcher/macos-launcher.log",
+        "Fusion Forge could not open {}.\n\nTry rerunning:\njcode setup-launcher\n\nLauncher log:\n~/.jcode/launcher/macos-launcher.log",
         terminal.label()
     ));
 
@@ -200,13 +200,13 @@ mkdir -p "$LOG_DIR" >/dev/null 2>&1 || true
 
 show_missing_executable() {{
   /usr/bin/osascript <<'APPLESCRIPT' >/dev/null 2>&1 || true
-display alert "Jcode launch failed" message "{missing_message}" as critical
+display alert "Fusion Forge launch failed" message "{missing_message}" as critical
 APPLESCRIPT
 }}
 
 show_terminal_launch_failure() {{
   /usr/bin/osascript <<'APPLESCRIPT' >/dev/null 2>&1 || true
-display alert "Jcode launch failed" message "{terminal_failure_message}" as critical
+display alert "Fusion Forge launch failed" message "{terminal_failure_message}" as critical
 APPLESCRIPT
 }}
 

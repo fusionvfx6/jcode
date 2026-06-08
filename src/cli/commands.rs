@@ -2790,6 +2790,7 @@ async fn run_single_message_command_ndjson(
                 &next_message,
                 Vec::new(),
                 None,
+                false,
                 event_tx.clone(),
             ));
             let mut run_result: Option<Result<()>> = None;

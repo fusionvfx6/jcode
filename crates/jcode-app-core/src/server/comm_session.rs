@@ -658,6 +658,7 @@ pub(super) async fn spawn_swarm_agent(
                     &initial_msg,
                     vec![],
                     None,
+                    false,
                     event_tx,
                 )
                 .await;

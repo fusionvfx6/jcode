@@ -80,6 +80,7 @@ struct ProcessingMessage {
     content: String,
     images: Vec<(String, String)>,
     system_reminder: Option<String>,
+    disable_tools: bool,
 }
 
 struct ProcessingState<'a> {
@@ -987,6 +988,7 @@ pub(super) async fn handle_client(
                 content,
                 images,
                 system_reminder,
+                disable_tools,
             } => {
                 if !client_is_processing {
                     let mut connections = client_connections.write().await;
@@ -1001,6 +1003,7 @@ pub(super) async fn handle_client(
                         content,
                         images,
                         system_reminder,
+                        disable_tools: disable_tools.unwrap_or(false),
                     },
                     &client_session_id,
                     &mut ProcessingState {
@@ -2476,6 +2479,7 @@ async fn start_processing_message(
         content,
         images,
         system_reminder,
+        disable_tools,
     } = message;
     if server_reload_starting() {
         crate::logging::info(&format!(
@@ -2540,6 +2544,7 @@ async fn start_processing_message(
             &content,
             images,
             system_reminder,
+            disable_tools,
             event_tx,
         ))
         .catch_unwind()
@@ -2814,12 +2819,13 @@ pub(super) async fn process_message_streaming_mpsc(
     content: &str,
     images: Vec<(String, String)>,
     system_reminder: Option<String>,
+    disable_tools: bool,
     event_tx: tokio::sync::mpsc::UnboundedSender<ServerEvent>,
 ) -> Result<()> {
     let mut agent = agent.lock().await;
     let session_id = agent.session_id().to_string();
     let result = agent
-        .run_once_streaming_mpsc(content, images, system_reminder, event_tx)
+        .run_once_streaming_mpsc(content, images, system_reminder, disable_tools, event_tx)
         .await;
     if result.is_ok() {
         crate::runtime_memory_log::emit_event(

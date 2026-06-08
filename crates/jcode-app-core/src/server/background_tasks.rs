@@ -60,6 +60,7 @@ async fn run_background_task_message_in_live_session_if_idle(
                 "A background task for this session just finished. Review the completion message and continue if useful."
                     .to_string(),
             ),
+            false,
             event_tx,
         )
         .await

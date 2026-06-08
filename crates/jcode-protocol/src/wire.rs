@@ -20,6 +20,8 @@ pub enum Request {
         images: Vec<(String, String)>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         system_reminder: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        disable_tools: Option<bool>,
     },
 
     /// Cancel current generation

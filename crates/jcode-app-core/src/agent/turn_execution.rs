@@ -39,6 +39,7 @@ impl Agent {
         user_message: &str,
         images: Vec<(String, String)>,
         system_reminder: Option<String>,
+        disable_tools: bool,
         event_tx: mpsc::UnboundedSender<ServerEvent>,
     ) -> Result<()> {
         // Inject any pending notifications before the user message
@@ -60,6 +61,7 @@ impl Agent {
 
         self.current_turn_system_reminder =
             system_reminder.filter(|value| !value.trim().is_empty());
+        self.current_turn_disable_tools = disable_tools;
 
         let mut blocks: Vec<ContentBlock> = images
             .into_iter()
@@ -82,6 +84,7 @@ impl Agent {
         self.session.save()?;
         let result = self.run_turn_streaming_mpsc(event_tx).await;
         self.current_turn_system_reminder = None;
+        self.current_turn_disable_tools = false;
         result
     }
 

@@ -141,7 +141,7 @@ fn build_linux_systemd_inhibit_command() -> Command {
     command
         .arg("--what=sleep:handle-lid-switch")
         .arg("--who=jcode")
-        .arg("--why=Jcode is streaming or processing active work")
+        .arg("--why=Fusion Forge is streaming or processing active work")
         .arg("sleep")
         .arg("infinity")
         .stdin(Stdio::null())

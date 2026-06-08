@@ -9575,7 +9575,7 @@ fn long_transcript_keeps_welcome_visual_only() {
 fn single_session_without_session_is_native_fresh_draft() {
     let mut app = SingleSessionApp::new(None);
 
-    assert_eq!(app.status_title(), "Jcode · fresh session");
+    assert_eq!(app.status_title(), "Fusion Forge · fresh session");
     assert!(!app.status_title().contains("Enter send"));
     assert!(!app.status_title().contains("Ctrl+"));
     assert_eq!(

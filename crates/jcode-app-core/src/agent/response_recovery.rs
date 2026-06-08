@@ -53,6 +53,68 @@ impl Agent {
         fallback
     }
 
+    fn parse_json_tool_call(
+        text: &str,
+    ) -> Option<(String, String, serde_json::Value, String)> {
+        let mut fallback: Option<(String, String, serde_json::Value, String)> = None;
+
+        for (brace_idx, ch) in text.char_indices() {
+            if ch != '{' {
+                continue;
+            }
+
+            let slice = &text[brace_idx..];
+            let mut stream =
+                serde_json::Deserializer::from_str(slice).into_iter::<serde_json::Value>();
+            let parsed = match stream.next() {
+                Some(Ok(value)) => value,
+                Some(Err(_)) | None => continue,
+            };
+            let consumed = stream.byte_offset();
+
+            let Some(obj) = parsed.as_object() else {
+                continue;
+            };
+
+            let Some(tool_name) = obj.get("name").and_then(|v| v.as_str()).map(str::trim) else {
+                continue;
+            };
+            if tool_name.is_empty() {
+                continue;
+            }
+
+            let Some(arguments) = obj.get("arguments") else {
+                continue;
+            };
+
+            let arguments = match arguments {
+                serde_json::Value::Object(_) => arguments.clone(),
+                serde_json::Value::String(raw) => {
+                    let Ok(reparsed) = serde_json::from_str::<serde_json::Value>(raw) else {
+                        continue;
+                    };
+                    if !reparsed.is_object() {
+                        continue;
+                    }
+                    reparsed
+                }
+                _ => continue,
+            };
+
+            let prefix = text[..brace_idx].trim_end().to_string();
+            let suffix = text[brace_idx + consumed..].trim().to_string();
+
+            if suffix.is_empty() {
+                return Some((prefix, tool_name.to_string(), arguments, suffix));
+            }
+            if fallback.is_none() {
+                fallback = Some((prefix, tool_name.to_string(), arguments, suffix));
+            }
+        }
+
+        fallback
+    }
+
     pub(super) fn recover_text_wrapped_tool_call(
         &self,
         text_content: &mut String,
@@ -62,8 +124,21 @@ impl Agent {
             return false;
         }
 
+        // Skip recovery when a chat-mode system reminder is active. If the caller explicitly
+        // asked for a conversational response ("Do not invoke tools"), we must not convert
+        // plain-text JSON blobs into tool executions — that would bypass the user's intent.
+        if self
+            .current_turn_system_reminder
+            .as_deref()
+            .map(|r| r.contains("Do not invoke tools"))
+            .unwrap_or(false)
+        {
+            return false;
+        }
+
         let Some((prefix, tool_name, arguments, suffix)) =
             Self::parse_text_wrapped_tool_call(text_content)
+                .or_else(|| Self::parse_json_tool_call(text_content))
         else {
             return false;
         };

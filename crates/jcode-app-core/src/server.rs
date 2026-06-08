@@ -818,6 +818,7 @@ impl Server {
                     "",
                     vec![],
                     Some(reminder),
+                    false,
                     event_tx,
                 )
                 .await;

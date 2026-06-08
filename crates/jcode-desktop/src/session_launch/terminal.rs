@@ -218,16 +218,16 @@ mod tests {
     #[test]
     fn parses_terminal_env_command_with_quotes_and_escapes() -> Result<()> {
         assert_eq!(
-            parse_terminal_env_command("kitty --title 'Jcode Desktop' --")?,
-            vec!["kitty", "--title", "Jcode Desktop", "--"]
+            parse_terminal_env_command("kitty --title 'Fusion Forge Desktop' --")?,
+            vec!["kitty", "--title", "Fusion Forge Desktop", "--"]
         );
         assert_eq!(
             parse_terminal_env_command(r#"footclient -T jcode\ desktop --"#)?,
-            vec!["footclient", "-T", "jcode desktop", "--"]
+            vec!["footclient", "-T", "fusion forge desktop", "--"]
         );
         assert_eq!(
-            parse_terminal_env_command(r#"terminal --class "jcode desktop""#)?,
-            vec!["terminal", "--class", "jcode desktop"]
+            parse_terminal_env_command(r#"terminal --class "fusion forge desktop""#)?,
+            vec!["terminal", "--class", "fusion forge desktop"]
         );
         Ok(())
     }
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn terminal_env_command_appends_jcode_invocation_without_shell() -> Result<()> {
-        let command = terminal_env_command("kitty --title 'Jcode Desktop'", &["--resume", "abc"])?;
+        let command = terminal_env_command("kitty --title 'Fusion Forge Desktop'", &["--resume", "abc"])?;
         let args = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(command.get_program().to_string_lossy(), "kitty");
         assert_eq!(
             args,
-            vec!["--title", "Jcode Desktop", "jcode", "--resume", "abc"]
+            vec!["--title", "Fusion Forge Desktop", "jcode", "--resume", "abc"]
         );
         Ok(())
     }

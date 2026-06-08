@@ -493,10 +493,10 @@ impl Workspace {
 
         match self.mode {
             InputMode::Navigation if self.zoomed => format!(
-                "Jcode Desktop · {mode}{zoom} · workspace {workspace} · panel {panel_size} · {focused} · j/k or Super+J/K scroll · g/G or Ctrl+Home/End top/bottom · z unzoom · o/Enter open · Esc quit"
+                "Fusion Forge Desktop · {mode}{zoom} · workspace {workspace} · panel {panel_size} · {focused} · j/k or Super+J/K scroll · g/G or Ctrl+Home/End top/bottom · z unzoom · o/Enter open · Esc quit"
             ),
             InputMode::Navigation => format!(
-                "Jcode Desktop · {mode}{zoom} · workspace {workspace} · panel {panel_size} · {focused} · h/l columns · j/k workspaces · Ctrl+1-4 panel size · Ctrl+R refresh · Ctrl+; new · Ctrl+? help · z zoom · i insert · Esc quit"
+                "Fusion Forge Desktop · {mode}{zoom} · workspace {workspace} · panel {panel_size} · {focused} · h/l columns · j/k workspaces · Ctrl+1-4 panel size · Ctrl+R refresh · Ctrl+; new · Ctrl+? help · z zoom · i insert · Esc quit"
             ),
             InputMode::Insert => {
                 let images = match self.pending_images.len() {
@@ -505,7 +505,7 @@ impl Workspace {
                     count => format!(" · {count} images"),
                 };
                 format!(
-                    "Jcode Desktop · {mode}{zoom} · workspace {workspace} · {focused}{images} · Enter send · Shift+Enter newline · Ctrl+I image · Esc NAV"
+                    "Fusion Forge Desktop · {mode}{zoom} · workspace {workspace} · {focused}{images} · Enter send · Shift+Enter newline · Ctrl+I image · Esc NAV"
                 )
             }
         }

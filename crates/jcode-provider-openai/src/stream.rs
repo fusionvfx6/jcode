@@ -155,6 +155,64 @@ pub fn parse_text_wrapped_tool_call(text: &str) -> Option<(String, String, Strin
     fallback
 }
 
+pub fn parse_json_tool_call(text: &str) -> Option<(String, String, String, String)> {
+    let mut fallback: Option<(String, String, String, String)> = None;
+
+    for (brace_idx, ch) in text.char_indices() {
+        if ch != '{' {
+            continue;
+        }
+
+        let slice = &text[brace_idx..];
+        let mut stream = serde_json::Deserializer::from_str(slice).into_iter::<Value>();
+        let parsed = match stream.next() {
+            Some(Ok(value)) => value,
+            Some(Err(_)) => continue,
+            None => continue,
+        };
+        let consumed = stream.byte_offset();
+
+        let Some(obj) = parsed.as_object() else {
+            continue;
+        };
+
+        let Some(tool_name) = obj.get("name").and_then(|v| v.as_str()).map(str::trim) else {
+            continue;
+        };
+        if tool_name.is_empty() {
+            continue;
+        }
+
+        let Some(arguments_value) = obj.get("arguments") else {
+            continue;
+        };
+
+        let arguments = match arguments_value {
+            Value::Object(_) => serde_json::to_string(arguments_value).ok()?,
+            Value::String(raw) => {
+                let reparsed: Value = serde_json::from_str(raw).ok()?;
+                if !reparsed.is_object() {
+                    continue;
+                }
+                serde_json::to_string(&reparsed).ok()?
+            }
+            _ => continue,
+        };
+
+        let prefix = text[..brace_idx].trim_end().to_string();
+        let suffix = text[brace_idx + consumed..].trim().to_string();
+
+        if suffix.is_empty() {
+            return Some((prefix, tool_name.to_string(), arguments, suffix));
+        }
+        if fallback.is_none() {
+            fallback = Some((prefix, tool_name.to_string(), arguments, suffix));
+        }
+    }
+
+    fallback
+}
+
 fn stream_text_or_recovered_tool_call(
     text: &str,
     pending: &mut VecDeque<StreamEvent>,
@@ -163,7 +221,9 @@ fn stream_text_or_recovered_tool_call(
         return None;
     }
 
-    if let Some((prefix, tool_name, arguments, suffix)) = parse_text_wrapped_tool_call(text) {
+    if let Some((prefix, tool_name, arguments, suffix)) =
+        parse_text_wrapped_tool_call(text).or_else(|| parse_json_tool_call(text))
+    {
         let total = RECOVERED_TEXT_WRAPPED_TOOL_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
         jcode_logging::warn(&format!(
             "[openai] Recovered text-wrapped tool call for '{}' (total={})",
@@ -650,7 +710,7 @@ fn handle_openai_image_generation_item(
                 err
             ));
             return Some(StreamEvent::TextDelta(
-                "\n[Generated image received, but Jcode could not decode it.]\n".to_string(),
+                "\n[Generated image received, but Fusion Forge could not decode it.]\n".to_string(),
             ));
         }
     };
@@ -689,7 +749,7 @@ fn handle_openai_image_generation_item(
             err
         ));
         return Some(StreamEvent::TextDelta(format!(
-            "\n[Generated image received ({} bytes), but Jcode could not save it.]\n",
+            "\n[Generated image received ({} bytes), but Fusion Forge could not save it.]\n",
             image_bytes.len()
         )));
     }
@@ -699,7 +759,7 @@ fn handle_openai_image_generation_item(
     if let Err(err) = std::fs::write(&path, image_bytes) {
         jcode_logging::warn(&format!("Failed to save OpenAI generated image: {}", err));
         return Some(StreamEvent::TextDelta(
-            "\n[Generated image received, but Jcode could not save it.]\n".to_string(),
+            "\n[Generated image received, but Fusion Forge could not save it.]\n".to_string(),
         ));
     }
 

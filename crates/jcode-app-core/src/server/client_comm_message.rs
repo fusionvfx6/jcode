@@ -125,6 +125,7 @@ async fn run_message_in_live_session_if_idle(
             &message,
             vec![],
             system_reminder,
+            false,
             event_tx,
         )
         .await;

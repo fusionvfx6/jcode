@@ -515,6 +515,7 @@ impl RemoteConnection {
             content,
             images,
             system_reminder,
+            disable_tools: None,
         };
         self.next_request_id += 1;
         self.send_request(request).await?;

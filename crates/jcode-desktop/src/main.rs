@@ -756,7 +756,7 @@ async fn run() -> Result<()> {
         .context("failed to create event loop")?;
     let event_loop_proxy = event_loop.create_proxy();
     startup_trace.mark("event loop created");
-    let mut window_builder = WindowBuilder::new().with_title("Jcode Desktop");
+    let mut window_builder = WindowBuilder::new().with_title("Fusion Forge Desktop");
     if let Some(placement) = desktop_reload_startup.window_placement {
         window_builder = placement.apply_to_window_builder(window_builder);
     } else {
@@ -2259,7 +2259,7 @@ fn headless_chat_smoke_message(args: &[String]) -> Option<String> {
 }
 
 const DESKTOP_HELP_LINES: &[&str] = &[
-    "Jcode Desktop",
+    "Fusion Forge Desktop",
     "",
     "Usage:",
     "  jcode-desktop [OPTIONS]",

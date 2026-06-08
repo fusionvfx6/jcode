@@ -448,7 +448,7 @@ pub fn build_session_context(working_dir: Option<&Path>) -> String {
     lines.push(format!("OS: {}", std::env::consts::OS));
     lines.push(format!("Architecture: {}", std::env::consts::ARCH));
     lines.push(format!(
-        "Jcode version: {} ({})",
+        "Fusion Forge version: {} ({})",
         jcode_build_meta::VERSION,
         jcode_build_meta::GIT_HASH
     ));

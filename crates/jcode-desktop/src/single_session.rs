@@ -2300,7 +2300,7 @@ impl SingleSessionApp {
     }
 
     pub(crate) fn status_title(&self) -> String {
-        format!("Jcode · {}", self.title())
+        format!("Fusion Forge · {}", self.title())
     }
 
     pub(crate) fn title(&self) -> String {

@@ -161,7 +161,7 @@ const END_TO_END_CHECKPOINTS: &[LiveVerificationCheckpointDefinition] = &[
         category: "tools",
         required_for_user_ready: true,
         spends_balance: true,
-        description: "A normal Jcode agent turn uses the real streamed parser, advertised tool schema, registry execution, tool-result followup, and transcript validation without malformed tool calls.",
+        description: "A normal Fusion Forge agent turn uses the real streamed parser, advertised tool schema, registry execution, tool-result followup, and transcript validation without malformed tool calls.",
     },
     LiveVerificationCheckpointDefinition {
         id: checkpoints::REASONING_CAPABILITY,

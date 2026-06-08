@@ -1212,7 +1212,7 @@ async fn deliver_to_session(
         agent_guard.message_count()
     };
     let event_tx = session_event_fanout_sender(session_id.to_string(), swarm_members);
-    process_message_streaming_mpsc(Arc::clone(&agent), text, Vec::new(), None, event_tx).await?;
+    process_message_streaming_mpsc(Arc::clone(&agent), text, Vec::new(), None, false, event_tx).await?;
     let reply = {
         let agent_guard = agent.lock().await;
         agent_guard.latest_assistant_text_after(start_message_index)
@@ -1243,7 +1243,7 @@ async fn deliver_to_launched_session(
         agent_guard.message_count()
     };
     let event_tx = session_event_fanout_sender(session_id.to_string(), swarm_members);
-    process_message_streaming_mpsc(Arc::clone(&agent), text, Vec::new(), None, event_tx).await?;
+    process_message_streaming_mpsc(Arc::clone(&agent), text, Vec::new(), None, false, event_tx).await?;
     let reply = {
         let agent_guard = agent.lock().await;
         agent_guard.latest_assistant_text_after(start_message_index)

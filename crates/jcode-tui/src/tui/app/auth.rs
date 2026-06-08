@@ -67,7 +67,7 @@ impl App {
             .unwrap_or_else(|| crate::subscription_catalog::DEFAULT_JCODE_API_BASE.to_string());
         let runtime_mode = crate::subscription_catalog::is_runtime_mode_enabled();
 
-        let mut message = String::from("Jcode Subscription Status\n\n");
+        let mut message = String::from("Fusion Forge Subscription Status\n\n");
         message.push_str(&format!(
             "  - Credentials: {}\n",
             if configured_key {
