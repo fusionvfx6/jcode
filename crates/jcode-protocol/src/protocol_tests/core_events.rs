@@ -5,6 +5,7 @@ fn test_request_roundtrip() -> Result<()> {
         content: "hello".to_string(),
         images: vec![],
         system_reminder: None,
+        disable_tools: None,
     };
     let json = serde_json::to_string(&req)?;
     let decoded = parse_request_json(&json)?;
@@ -29,6 +30,19 @@ fn test_compacted_history_request_roundtrip() -> Result<()> {
         return Err(anyhow!("wrong request type"));
     };
     assert_eq!(visible_messages, 64);
+    Ok(())
+}
+
+#[test]
+fn test_hello_request_roundtrip() -> Result<()> {
+    let req = Request::Hello { id: 12 };
+    let json = serde_json::to_string(&req)?;
+    assert!(json.contains("\"type\":\"hello\""));
+    let decoded = parse_request_json(&json)?;
+    assert_eq!(decoded.id(), 12);
+    let Request::Hello { .. } = decoded else {
+        return Err(anyhow!("wrong request type"));
+    };
     Ok(())
 }
 
@@ -87,10 +101,15 @@ fn test_notify_auth_changed_typed_auth_payload_roundtrip() -> Result<()> {
     assert_eq!(provider.as_deref(), Some("cerebras"));
     let auth = auth.expect("typed auth payload should roundtrip");
     assert_eq!(auth.provider.as_str(), "cerebras");
-    assert_eq!(auth.credential_source, Some(AuthCredentialSource::ApiKeyFile));
+    assert_eq!(
+        auth.credential_source,
+        Some(AuthCredentialSource::ApiKeyFile)
+    );
     assert_eq!(auth.auth_method, Some(AuthMethod::RemoteTuiPasteApiKey));
     assert_eq!(
-        auth.expected_runtime.as_ref().map(RuntimeProviderKey::as_str),
+        auth.expected_runtime
+            .as_ref()
+            .map(RuntimeProviderKey::as_str),
         Some("openai-compatible")
     );
     assert_eq!(
@@ -179,6 +198,37 @@ fn test_event_roundtrip() -> Result<()> {
         return Err(anyhow!("wrong event type"));
     };
     assert_eq!(text, "hello");
+    Ok(())
+}
+
+#[test]
+fn test_hello_event_roundtrip() -> Result<()> {
+    let event = ServerEvent::Hello {
+        id: 14,
+        protocol_version: PROTOCOL_VERSION,
+        server_version: "v0.23.0".to_string(),
+        git_hash: Some("abc123".to_string()),
+        capabilities: DaemonCapabilities::fusion_forge_defaults(),
+    };
+    let json = encode_event(&event);
+    assert!(json.contains("\"type\":\"hello\""));
+    let decoded = parse_event_json(json.trim())?;
+    let ServerEvent::Hello {
+        id,
+        protocol_version,
+        server_version,
+        git_hash,
+        capabilities,
+    } = decoded
+    else {
+        return Err(anyhow!("wrong event type"));
+    };
+    assert_eq!(id, 14);
+    assert_eq!(protocol_version, PROTOCOL_VERSION);
+    assert_eq!(server_version, "v0.23.0");
+    assert_eq!(git_hash.as_deref(), Some("abc123"));
+    assert!(capabilities.basic_agent_tools);
+    assert!(!capabilities.autocomplete);
     Ok(())
 }
 

@@ -316,6 +316,11 @@ fn ping_request_is_lightweight_control_request() {
 }
 
 #[test]
+fn hello_request_is_lightweight_control_request() {
+    assert!((Request::Hello { id: 2 }).is_lightweight_control_request());
+}
+
+#[test]
 fn server_reload_starting_is_true_only_for_recent_starting_marker() {
     let _guard = crate::storage::lock_test_env();
     let _runtime = IsolatedRuntimeDir::new();
@@ -382,6 +387,7 @@ fn reload_starting_rejects_new_turn_without_spawning_processing_task() {
                 content: "do not start during reload".to_string(),
                 images: Vec::new(),
                 system_reminder: None,
+                disable_tools: false,
             },
             "session_guard",
             &mut ProcessingState {
@@ -474,6 +480,7 @@ fn accepted_reload_recovery_continuation_marks_intent_delivered() -> anyhow::Res
                 content: "continue after reload".to_string(),
                 images: Vec::new(),
                 system_reminder: Some(continuation.to_string()),
+                disable_tools: false,
             },
             session_id,
             &mut ProcessingState {
@@ -572,6 +579,7 @@ fn reload_starting_rejects_new_turns_for_multiple_sessions() {
                     content: format!("do not start {session_id} during reload"),
                     images: Vec::new(),
                     system_reminder: None,
+                    disable_tools: false,
                 },
                 session_id,
                 &mut ProcessingState {

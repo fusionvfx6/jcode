@@ -24,7 +24,7 @@ use super::{
     update_member_status_with_report,
 };
 use crate::config::SwarmSpawnMode;
-use crate::protocol::{Request, ServerEvent};
+use crate::protocol::{DaemonCapabilities, PROTOCOL_VERSION, Request, ServerEvent};
 use crate::provider::Provider;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
@@ -104,6 +104,20 @@ pub(super) async fn handle_lightweight_control_request(
     } = context;
     if let Request::Ping { id } = request {
         write_direct_event(&writer, &ServerEvent::Pong { id }).await?;
+        return Ok(());
+    }
+    if let Request::Hello { id } = request {
+        write_direct_event(
+            &writer,
+            &ServerEvent::Hello {
+                id,
+                protocol_version: PROTOCOL_VERSION,
+                server_version: jcode_build_meta::VERSION.to_string(),
+                git_hash: Some(jcode_build_meta::GIT_HASH.to_string()),
+                capabilities: DaemonCapabilities::fusion_forge_defaults(),
+            },
+        )
+        .await?;
         return Ok(());
     }
 

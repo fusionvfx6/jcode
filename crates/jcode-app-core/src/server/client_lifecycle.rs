@@ -1233,6 +1233,20 @@ pub(super) async fn handle_client(
                 }
             }
 
+            Request::Hello { id } => {
+                let json = encode_event(&ServerEvent::Hello {
+                    id,
+                    protocol_version: jcode_base::protocol::PROTOCOL_VERSION,
+                    server_version: jcode_build_meta::VERSION.to_string(),
+                    git_hash: Some(jcode_build_meta::GIT_HASH.to_string()),
+                    capabilities: jcode_base::protocol::DaemonCapabilities::fusion_forge_defaults(),
+                });
+                let mut w = writer.lock().await;
+                if w.write_all(json.as_bytes()).await.is_err() {
+                    break;
+                }
+            }
+
             Request::GetState { id } => {
                 if handle_get_state(
                     id,

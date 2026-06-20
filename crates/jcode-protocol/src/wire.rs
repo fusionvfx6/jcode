@@ -62,6 +62,10 @@ pub enum Request {
     #[serde(rename = "ping")]
     Ping { id: u64 },
 
+    /// Lightweight protocol handshake
+    #[serde(rename = "hello")]
+    Hello { id: u64 },
+
     /// Get current state (debug)
     #[serde(rename = "state")]
     GetState { id: u64 },
@@ -848,6 +852,17 @@ pub enum ServerEvent {
     /// Pong response
     #[serde(rename = "pong")]
     Pong { id: u64 },
+
+    /// Lightweight protocol handshake response
+    #[serde(rename = "hello")]
+    Hello {
+        id: u64,
+        protocol_version: u32,
+        server_version: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        git_hash: Option<String>,
+        capabilities: DaemonCapabilities,
+    },
 
     /// Current state (debug)
     #[serde(rename = "state")]

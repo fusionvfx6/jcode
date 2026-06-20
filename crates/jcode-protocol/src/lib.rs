@@ -28,6 +28,8 @@ pub use memory_snapshots::{
     MemoryStepStatusSnapshot,
 };
 
+pub const PROTOCOL_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptMode {
@@ -397,6 +399,35 @@ pub struct AwaitedMemberStatus {
     pub completion_report: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DaemonCapabilities {
+    pub chat: bool,
+    pub basic_agent_tools: bool,
+    pub terminal_input: bool,
+    pub memory: bool,
+    pub swarm: bool,
+    pub mcp: bool,
+    pub autocomplete: bool,
+    pub apply_patch: bool,
+    pub run_skill: bool,
+}
+
+impl DaemonCapabilities {
+    pub fn fusion_forge_defaults() -> Self {
+        Self {
+            chat: true,
+            basic_agent_tools: true,
+            terminal_input: true,
+            memory: true,
+            swarm: true,
+            mcp: true,
+            autocomplete: false,
+            apply_patch: false,
+            run_skill: false,
+        }
+    }
+}
+
 impl Request {
     pub fn id(&self) -> u64 {
         match self {
@@ -409,6 +440,7 @@ impl Request {
             Request::Rewind { id, .. } => *id,
             Request::RewindUndo { id } => *id,
             Request::Ping { id } => *id,
+            Request::Hello { id } => *id,
             Request::GetState { id } => *id,
             Request::DebugCommand { id, .. } => *id,
             Request::ClientDebugCommand { id, .. } => *id,
@@ -478,6 +510,7 @@ impl Request {
         matches!(
             self,
             Request::Ping { .. }
+                | Request::Hello { .. }
                 | Request::CommShare { .. }
                 | Request::CommRead { .. }
                 | Request::CommMessage { .. }
