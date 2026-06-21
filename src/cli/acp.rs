@@ -221,6 +221,7 @@ impl AcpRuntime {
             "session/prompt" => self.handle_session_prompt(message).await?,
             "session/cancel" => self.handle_session_cancel(message).await?,
             "session/close" => self.handle_session_close(message).await?,
+            "session/capabilities" => self.handle_session_capabilities(message).await?,
             "workspace/autocomplete" => self.handle_workspace_autocomplete(message).await?,
             "workspace/autocomplete/cancel" => {
                 self.handle_workspace_autocomplete_cancel(message).await?
@@ -449,6 +450,33 @@ impl AcpRuntime {
             let _ = session.send(&Request::Cancel { id: cancel_id }).await;
         }
         self.write_result(id, json!({})).await?;
+        Ok(())
+    }
+
+    async fn handle_session_capabilities(&self, message: JsonRpcMessage) -> Result<()> {
+        let Some(id) = message.id else {
+            return Ok(());
+        };
+        let session_id = match required_session_id(&message.params) {
+            Ok(session_id) => session_id,
+            Err(err) => {
+                self.write_error_value(id, JSONRPC_INVALID_PARAMS, err).await?;
+                return Ok(());
+            }
+        };
+
+        if !self.sessions.lock().await.contains_key(&session_id) {
+            self.write_error_value(
+                id,
+                JSONRPC_INVALID_PARAMS,
+                format!("Unknown ACP sessionId: {session_id}"),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        let result = self.build_effective_capabilities_snapshot(&session_id).await;
+        self.write_result(id, result).await?;
         Ok(())
     }
 
@@ -806,6 +834,22 @@ impl AcpRuntime {
                 })?;
 
         run_autocomplete_request(provider, request).await
+    }
+
+    async fn build_effective_capabilities_snapshot(&self, session_id: &str) -> Value {
+        let provider_result =
+            super::provider_init::init_provider_quiet(&self.provider_choice, self.model.as_deref())
+                .await
+                .map_err(|err| err.to_string());
+
+        build_effective_capabilities_snapshot(
+            self.profile,
+            &self.provider_choice,
+            self.model.as_deref(),
+            self.provider_profile.as_deref(),
+            session_id,
+            provider_result,
+        )
     }
 }
 
@@ -1241,6 +1285,7 @@ fn initialize_result(params: &Value, profile: AcpProfile) -> Value {
                 "jcode": {
                     "profile": profile.as_str(),
                     "extensions": ["raw_server_event"],
+                    "capabilityProbeMethod": "session/capabilities",
                     "capabilities": {
                         "autocomplete": true,
                         "runSkill": false,
@@ -1263,6 +1308,205 @@ fn initialize_result(params: &Value, profile: AcpProfile) -> Value {
         },
         "authMethods": [],
     })
+}
+
+fn build_effective_capabilities_snapshot(
+    profile: AcpProfile,
+    provider_choice: &ProviderChoice,
+    configured_model: Option<&str>,
+    provider_profile: Option<&str>,
+    session_id: &str,
+    provider_result: std::result::Result<Arc<dyn Provider>, String>,
+) -> Value {
+    let requested_provider = provider_choice.as_arg_value();
+    let requested_model = configured_model.map(str::to_string);
+    let profile_name = provider_profile
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    match provider_result {
+        Ok(provider) => {
+            let effective_model = provider.model();
+            let effective_provider = provider.name().to_string();
+            let context_window = provider.context_window();
+            let transport = provider.transport();
+            let auth_method = provider.active_auth_method_label().map(str::to_string);
+            let tool_calling = profile.is_extended() && provider.handles_tools_internally();
+            let provider_ready = !effective_model.trim().is_empty();
+            json!({
+                "sessionId": session_id,
+                "variant": "fusion-forge-acp-v1",
+                "provider": {
+                    "requested": requested_provider,
+                    "effective": effective_provider,
+                    "displayName": provider.display_name(),
+                    "profile": profile_name,
+                    "transport": transport,
+                    "authMethod": auth_method,
+                    "type": provider_type_label(provider_choice),
+                    "ready": provider_ready,
+                },
+                "model": {
+                    "requested": requested_model,
+                    "effective": effective_model,
+                    "contextWindow": context_window,
+                },
+                "capabilities": {
+                    "autocomplete": {
+                        "available": profile.is_extended(),
+                        "mode": "fim",
+                        "notes": "Translated by Jcode provider adapters from universal prefix/suffix ACP input.",
+                        "maxContextTokens": context_window,
+                        "timeoutMsMax": 10_000,
+                    },
+                    "streaming": {
+                        "available": true,
+                    },
+                    "toolCalling": {
+                        "available": tool_calling,
+                        "mode": if tool_calling { "native" } else { "unavailable" },
+                    },
+                    "skills": {
+                        "available": false,
+                        "requiresToolCalling": true,
+                        "reason": if tool_calling {
+                            "ACP skills contract is specified but not implemented in this runtime build."
+                        } else {
+                            "Active provider does not advertise native tool handling and ACP skills fallback is not implemented in this runtime build."
+                        },
+                    },
+                    "patch": {
+                        "available": false,
+                        "preview": false,
+                        "apply": false,
+                        "reason": "ACP patch flow is not implemented in this runtime build.",
+                    },
+                    "memory": {
+                        "available": false,
+                        "list": false,
+                        "forget": false,
+                        "export": false,
+                        "reason": "ACP memory surface is not implemented in this runtime build.",
+                    },
+                    "mcp": {
+                        "available": false,
+                        "status": false,
+                        "reason": "ACP MCP status surface is not implemented in this runtime build.",
+                    },
+                }
+            })
+        }
+        Err(error) => json!({
+            "sessionId": session_id,
+            "variant": "fusion-forge-acp-v1",
+            "provider": {
+                "requested": requested_provider,
+                "effective": Value::Null,
+                "displayName": Value::Null,
+                "profile": profile_name,
+                "transport": Value::Null,
+                "authMethod": Value::Null,
+                "type": provider_type_label(provider_choice),
+                "ready": false,
+                "reason": error,
+            },
+            "model": {
+                "requested": requested_model,
+                "effective": Value::Null,
+                "contextWindow": Value::Null,
+            },
+            "capabilities": {
+                "autocomplete": {
+                    "available": false,
+                    "mode": "fim",
+                    "reason": "Provider initialization failed; autocomplete adapter unavailable.",
+                    "timeoutMsMax": 10_000,
+                },
+                "streaming": {
+                    "available": false,
+                    "reason": "Provider initialization failed.",
+                },
+                "toolCalling": {
+                    "available": false,
+                    "reason": "Provider initialization failed.",
+                },
+                "skills": {
+                    "available": false,
+                    "reason": "Provider initialization failed.",
+                },
+                "patch": {
+                    "available": false,
+                    "preview": false,
+                    "apply": false,
+                    "reason": "Provider initialization failed.",
+                },
+                "memory": {
+                    "available": false,
+                    "list": false,
+                    "forget": false,
+                    "export": false,
+                    "reason": "ACP memory surface is not implemented in this runtime build.",
+                },
+                "mcp": {
+                    "available": false,
+                    "status": false,
+                    "reason": "ACP MCP status surface is not implemented in this runtime build.",
+                },
+            }
+        }),
+    }
+}
+
+fn provider_type_label(choice: &ProviderChoice) -> &'static str {
+    match choice {
+        ProviderChoice::Ollama | ProviderChoice::Lmstudio => "local",
+        ProviderChoice::OpenaiCompatible => "custom",
+        ProviderChoice::Jcode
+        | ProviderChoice::Claude
+        | ProviderChoice::AnthropicApi
+        | ProviderChoice::Openai
+        | ProviderChoice::OpenaiApi
+        | ProviderChoice::Openrouter
+        | ProviderChoice::Bedrock
+        | ProviderChoice::Azure
+        | ProviderChoice::Opencode
+        | ProviderChoice::OpencodeGo
+        | ProviderChoice::Zai
+        | ProviderChoice::Kimi
+        | ProviderChoice::Ai302
+        | ProviderChoice::Baseten
+        | ProviderChoice::Cortecs
+        | ProviderChoice::Comtegra
+        | ProviderChoice::Deepseek
+        | ProviderChoice::Fpt
+        | ProviderChoice::Firmware
+        | ProviderChoice::HuggingFace
+        | ProviderChoice::MoonshotAi
+        | ProviderChoice::Nebius
+        | ProviderChoice::Scaleway
+        | ProviderChoice::Stackit
+        | ProviderChoice::Groq
+        | ProviderChoice::Mistral
+        | ProviderChoice::Perplexity
+        | ProviderChoice::TogetherAi
+        | ProviderChoice::Deepinfra
+        | ProviderChoice::Fireworks
+        | ProviderChoice::Minimax
+        | ProviderChoice::Xai
+        | ProviderChoice::NvidiaNim
+        | ProviderChoice::XiaomiMimo
+        | ProviderChoice::Chutes
+        | ProviderChoice::Cerebras
+        | ProviderChoice::AlibabaCodingPlan
+        | ProviderChoice::Cursor
+        | ProviderChoice::Copilot
+        | ProviderChoice::Gemini
+        | ProviderChoice::Antigravity
+        | ProviderChoice::Google
+        | ProviderChoice::ClaudeSubprocess
+        | ProviderChoice::Auto => "cloud",
+    }
 }
 
 fn cwd_from_params(params: &Value) -> std::result::Result<PathBuf, String> {
@@ -1445,6 +1689,15 @@ mod tests {
         response: String,
     }
 
+    struct StaticCapabilityProvider {
+        provider_name: &'static str,
+        display_name: &'static str,
+        model: &'static str,
+        context_window: usize,
+        handles_tools: bool,
+        transport: Option<&'static str>,
+    }
+
     #[async_trait::async_trait]
     impl Provider for StaticAutocompleteProvider {
         async fn complete(
@@ -1472,6 +1725,54 @@ mod tests {
         fn fork(&self) -> Arc<dyn Provider> {
             Arc::new(Self {
                 response: self.response.clone(),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for StaticCapabilityProvider {
+        async fn complete(
+            &self,
+            _messages: &[crate::message::Message],
+            _tools: &[crate::message::ToolDefinition],
+            _system: &str,
+            _resume_session_id: Option<&str>,
+        ) -> Result<EventStream> {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+
+        fn name(&self) -> &str {
+            self.provider_name
+        }
+
+        fn display_name(&self) -> String {
+            self.display_name.to_string()
+        }
+
+        fn model(&self) -> String {
+            self.model.to_string()
+        }
+
+        fn handles_tools_internally(&self) -> bool {
+            self.handles_tools
+        }
+
+        fn transport(&self) -> Option<String> {
+            self.transport.map(str::to_string)
+        }
+
+        fn context_window(&self) -> usize {
+            self.context_window
+        }
+
+        fn fork(&self) -> Arc<dyn Provider> {
+            Arc::new(Self {
+                provider_name: self.provider_name,
+                display_name: self.display_name,
+                model: self.model,
+                context_window: self.context_window,
+                handles_tools: self.handles_tools,
+                transport: self.transport,
             })
         }
     }
@@ -1565,6 +1866,10 @@ mod tests {
         assert_eq!(
             result["agentCapabilities"]["_meta"]["jcode"]["capabilities"]["autocomplete"],
             true
+        );
+        assert_eq!(
+            result["agentCapabilities"]["_meta"]["jcode"]["capabilityProbeMethod"],
+            "session/capabilities"
         );
     }
 
@@ -1700,5 +2005,49 @@ mod tests {
 
         assert_eq!(error.common_code, "AUTOCOMPLETE_TIMEOUT");
         assert!(error.retryable);
+    }
+
+    #[test]
+    fn capability_snapshot_reports_effective_provider_state() {
+        let snapshot = build_effective_capabilities_snapshot(
+            AcpProfile::Extended,
+            &ProviderChoice::Ollama,
+            Some("llama3.2"),
+            None,
+            "session_123",
+            Ok(Arc::new(StaticCapabilityProvider {
+                provider_name: "ollama",
+                display_name: "Ollama",
+                model: "llama3.2",
+                context_window: 32_768,
+                handles_tools: false,
+                transport: Some("http"),
+            }) as Arc<dyn Provider>),
+        );
+
+        assert_eq!(snapshot["provider"]["requested"], "ollama");
+        assert_eq!(snapshot["provider"]["effective"], "ollama");
+        assert_eq!(snapshot["provider"]["type"], "local");
+        assert_eq!(snapshot["model"]["contextWindow"], 32768);
+        assert_eq!(snapshot["capabilities"]["autocomplete"]["available"], true);
+        assert_eq!(snapshot["capabilities"]["toolCalling"]["available"], false);
+        assert_eq!(snapshot["capabilities"]["skills"]["available"], false);
+    }
+
+    #[test]
+    fn capability_snapshot_reports_provider_init_failure_without_throwing() {
+        let snapshot = build_effective_capabilities_snapshot(
+            AcpProfile::Extended,
+            &ProviderChoice::Openai,
+            Some("gpt-5.4"),
+            None,
+            "session_456",
+            Err("missing credentials".to_string()),
+        );
+
+        assert_eq!(snapshot["provider"]["ready"], false);
+        assert_eq!(snapshot["provider"]["requested"], "openai");
+        assert_eq!(snapshot["capabilities"]["autocomplete"]["available"], false);
+        assert_eq!(snapshot["capabilities"]["streaming"]["available"], false);
     }
 }
