@@ -6,6 +6,7 @@
 mod mock_provider;
 mod test_support;
 
+mod acp_autocomplete;
 mod ambient;
 mod binary_integration;
 mod burst_spawn;

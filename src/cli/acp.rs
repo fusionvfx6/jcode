@@ -1,8 +1,10 @@
 use super::dispatch;
 use super::provider_init::ProviderChoice;
 use crate::protocol::{Request, ServerEvent};
+use crate::provider::Provider;
 use crate::transport::{ReadHalf, WriteHalf};
 use anyhow::{Context, Result};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,6 +21,8 @@ const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 const JSONRPC_INVALID_PARAMS: i64 = -32602;
 const JSONRPC_INTERNAL_ERROR: i64 = -32603;
 const JSONRPC_SERVER_ERROR: i64 = -32000;
+
+const AUTOCOMPLETE_SYSTEM_PROMPT: &str = "You are a low-latency inline code completion engine. Return only the exact text to insert at the cursor. Do not repeat the existing prefix or suffix. Do not explain. Do not use markdown fences.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AcpProfile {
@@ -134,6 +138,7 @@ impl DaemonSession {
 struct AcpRuntime {
     stdout: Arc<Mutex<tokio::io::Stdout>>,
     sessions: Arc<Mutex<HashMap<String, Arc<DaemonSession>>>>,
+    autocomplete_tasks: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
     profile: AcpProfile,
     provider_choice: ProviderChoice,
     model: Option<String>,
@@ -150,6 +155,7 @@ impl AcpRuntime {
         Self {
             stdout: Arc::new(Mutex::new(tokio::io::stdout())),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            autocomplete_tasks: Arc::new(Mutex::new(HashMap::new())),
             profile,
             provider_choice,
             model,
@@ -215,6 +221,10 @@ impl AcpRuntime {
             "session/prompt" => self.handle_session_prompt(message).await?,
             "session/cancel" => self.handle_session_cancel(message).await?,
             "session/close" => self.handle_session_close(message).await?,
+            "workspace/autocomplete" => self.handle_workspace_autocomplete(message).await?,
+            "workspace/autocomplete/cancel" => {
+                self.handle_workspace_autocomplete_cancel(message).await?
+            }
             _ if method.starts_with('_') => {
                 if let Some(id) = message.id {
                     self.write_error_value(
@@ -439,6 +449,69 @@ impl AcpRuntime {
             let _ = session.send(&Request::Cancel { id: cancel_id }).await;
         }
         self.write_result(id, json!({})).await?;
+        Ok(())
+    }
+
+    async fn handle_workspace_autocomplete(&self, message: JsonRpcMessage) -> Result<()> {
+        let Some(id) = message.id else {
+            return Ok(());
+        };
+        let request = match autocomplete_request_from_params(&message.params) {
+            Ok(request) => request,
+            Err(err) => {
+                self.write_error_value(id, JSONRPC_INVALID_PARAMS, err)
+                    .await?;
+                return Ok(());
+            }
+        };
+
+        let runtime = self.clone();
+        let rpc_id = id.clone();
+        let task_key = rpc_tracking_key(&id);
+        let task_key_for_cleanup = task_key.clone();
+        let handle = tokio::spawn(async move {
+            let result = runtime.execute_autocomplete_rpc(request).await;
+            match result {
+                Ok(response) => {
+                    let _ = runtime.write_result(rpc_id.clone(), response).await;
+                }
+                Err(err) => {
+                    let _ = runtime.write_common_error(rpc_id.clone(), err).await;
+                }
+            }
+            runtime
+                .autocomplete_tasks
+                .lock()
+                .await
+                .remove(&task_key_for_cleanup);
+        });
+
+        self.autocomplete_tasks
+            .lock()
+            .await
+            .insert(task_key, handle);
+        Ok(())
+    }
+
+    async fn handle_workspace_autocomplete_cancel(&self, message: JsonRpcMessage) -> Result<()> {
+        let request_id = match autocomplete_cancel_request_id(&message.params) {
+            Ok(request_id) => request_id,
+            Err(err) => {
+                if let Some(id) = message.id {
+                    self.write_error_value(id, JSONRPC_INVALID_PARAMS, err)
+                        .await?;
+                }
+                return Ok(());
+            }
+        };
+
+        if let Some(task) = self.autocomplete_tasks.lock().await.remove(&request_id) {
+            task.abort();
+        }
+
+        if let Some(id) = message.id {
+            self.write_result(id, json!({})).await?;
+        }
         Ok(())
     }
 
@@ -668,6 +741,22 @@ impl AcpRuntime {
         .await
     }
 
+    async fn write_common_error(&self, id: Value, error: AutocompleteRpcError) -> Result<()> {
+        self.write_value(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": error.jsonrpc_code,
+                "message": error.message,
+                "data": {
+                    "code": error.common_code,
+                    "retryable": error.retryable,
+                }
+            }
+        }))
+        .await
+    }
+
     async fn write_notification(&self, method: &str, params: Value) -> Result<()> {
         self.write_value(json!({
             "jsonrpc": "2.0",
@@ -699,6 +788,88 @@ impl AcpRuntime {
         stdout.write_all(line.as_bytes()).await?;
         stdout.flush().await?;
         Ok(())
+    }
+
+    async fn execute_autocomplete_rpc(
+        &self,
+        request: AutocompleteRequest,
+    ) -> std::result::Result<Value, AutocompleteRpcError> {
+        let provider =
+            super::provider_init::init_provider_quiet(&self.provider_choice, self.model.as_deref())
+                .await
+                .map_err(|err| {
+                    AutocompleteRpcError::server(
+                        "AUTOCOMPLETE_UNAVAILABLE",
+                        format!("Autocomplete provider is unavailable: {err}"),
+                        false,
+                    )
+                })?;
+
+        run_autocomplete_request(provider, request).await
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AutocompleteRequest {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    document: AutocompleteDocument,
+    cursor: AutocompleteCursor,
+    limits: AutocompleteLimits,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AutocompleteDocument {
+    uri: String,
+    #[serde(rename = "languageId")]
+    language_id: String,
+    version: u64,
+    prefix: String,
+    suffix: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AutocompleteLimits {
+    #[serde(rename = "maxPrefixChars")]
+    max_prefix_chars: usize,
+    #[serde(rename = "maxSuffixChars")]
+    max_suffix_chars: usize,
+    #[serde(rename = "timeoutMs")]
+    timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AutocompleteCursor {
+    line: u64,
+    character: u64,
+}
+
+impl AutocompleteDocument {
+    fn cursor_line(&self, cursor: &AutocompleteCursor) -> u64 {
+        cursor.line
+    }
+
+    fn cursor_character(&self, cursor: &AutocompleteCursor) -> u64 {
+        cursor.character
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AutocompleteRpcError {
+    jsonrpc_code: i64,
+    common_code: &'static str,
+    message: String,
+    retryable: bool,
+}
+
+impl AutocompleteRpcError {
+    fn server(common_code: &'static str, message: String, retryable: bool) -> Self {
+        Self {
+            jsonrpc_code: JSONRPC_SERVER_ERROR,
+            common_code,
+            message,
+            retryable,
+        }
     }
 }
 
@@ -881,6 +1052,161 @@ fn parse_json_object(input: &str) -> Option<Value> {
     Some(value)
 }
 
+fn autocomplete_request_from_params(
+    params: &Value,
+) -> std::result::Result<AutocompleteRequest, String> {
+    let request: AutocompleteRequest =
+        serde_json::from_value(params.clone()).map_err(|err| err.to_string())?;
+    if request.session_id.trim().is_empty() {
+        return Err("Missing required sessionId".to_string());
+    }
+    if request.document.uri.trim().is_empty() {
+        return Err("Autocomplete document uri is required".to_string());
+    }
+    if request.document.language_id.trim().is_empty() {
+        return Err("Autocomplete document languageId is required".to_string());
+    }
+    if request.limits.max_prefix_chars == 0 {
+        return Err("limits.maxPrefixChars must be greater than zero".to_string());
+    }
+    if request.limits.timeout_ms == 0 {
+        return Err("limits.timeoutMs must be greater than zero".to_string());
+    }
+    if request.document.prefix.chars().count() > request.limits.max_prefix_chars
+        || request.document.suffix.chars().count() > request.limits.max_suffix_chars
+    {
+        return Err(format!(
+            "Autocomplete input exceeds limits for {}",
+            request.document.uri
+        ));
+    }
+    Ok(request)
+}
+
+fn autocomplete_cancel_request_id(params: &Value) -> std::result::Result<String, String> {
+    params
+        .get("requestId")
+        .or_else(|| params.get("id"))
+        .map(rpc_tracking_key)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Missing required requestId".to_string())
+}
+
+fn rpc_tracking_key(id: &Value) -> String {
+    match id {
+        Value::String(value) => value.clone(),
+        Value::Number(value) => value.to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::Null => "null".to_string(),
+        other => other.to_string(),
+    }
+}
+
+async fn run_autocomplete_request(
+    provider: Arc<dyn Provider>,
+    request: AutocompleteRequest,
+) -> std::result::Result<Value, AutocompleteRpcError> {
+    let prompt = build_autocomplete_prompt(&request);
+    let timeout = std::time::Duration::from_millis(request.limits.timeout_ms);
+    let raw_completion = tokio::time::timeout(
+        timeout,
+        provider.complete_simple(&prompt, AUTOCOMPLETE_SYSTEM_PROMPT),
+    )
+    .await
+    .map_err(|_| {
+        AutocompleteRpcError::server(
+            "AUTOCOMPLETE_TIMEOUT",
+            format!(
+                "Autocomplete timed out after {} ms for {}",
+                request.limits.timeout_ms, request.document.uri
+            ),
+            true,
+        )
+    })?
+    .map_err(|err| {
+        AutocompleteRpcError::server(
+            "AUTOCOMPLETE_UNAVAILABLE",
+            format!("Autocomplete request failed: {err}"),
+            true,
+        )
+    })?;
+
+    let completion = normalize_autocomplete_completion(&raw_completion, &request.document.suffix);
+    let finish_reason = if completion.is_empty() {
+        "empty"
+    } else {
+        "completed"
+    };
+
+    Ok(json!({
+        "completion": completion,
+        "range": {
+            "startLine": request.document.cursor_line(&request.cursor),
+            "startCharacter": request.document.cursor_character(&request.cursor),
+            "endLine": request.document.cursor_line(&request.cursor),
+            "endCharacter": request.document.cursor_character(&request.cursor),
+        },
+        "confidence": if completion.is_empty() { 0.0 } else { 0.5 },
+        "finishReason": finish_reason,
+        "providerEffective": {
+            "providerName": provider.name(),
+            "modelName": provider.model(),
+        }
+    }))
+}
+
+fn build_autocomplete_prompt(request: &AutocompleteRequest) -> String {
+    format!(
+        "Complete the code at the cursor.\nLanguage: {}\nFile: {}\nDocument version: {}\n\nPrefix:\n<PRE>\n{}\n</PRE>\n\nSuffix:\n<SUF>\n{}\n</SUF>\n\nReturn only the missing text to insert between <PRE> and <SUF>.",
+        request.document.language_id,
+        request.document.uri,
+        request.document.version,
+        request.document.prefix,
+        request.document.suffix
+    )
+}
+
+fn normalize_autocomplete_completion(raw: &str, suffix: &str) -> String {
+    let mut completion = raw.replace("\r\n", "\n");
+    if completion.starts_with("```") {
+        completion = strip_markdown_fence(&completion);
+    }
+
+    let suffix_chars: Vec<char> = suffix.chars().collect();
+    let completion_chars: Vec<char> = completion.chars().collect();
+    let max_overlap = completion_chars.len().min(suffix_chars.len());
+    let mut overlap = 0usize;
+    for candidate in (1..=max_overlap).rev() {
+        if completion_chars[completion_chars.len() - candidate..] == suffix_chars[..candidate] {
+            overlap = candidate;
+            break;
+        }
+    }
+
+    if overlap > 0 {
+        completion_chars[..completion_chars.len() - overlap]
+            .iter()
+            .collect()
+    } else {
+        completion
+    }
+}
+
+fn strip_markdown_fence(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let Some(without_open) = trimmed.strip_prefix("```") else {
+        return raw.to_string();
+    };
+    let body = without_open
+        .split_once('\n')
+        .map(|(_, rest)| rest)
+        .unwrap_or_default();
+    body.strip_suffix("```")
+        .unwrap_or(body)
+        .trim_end_matches('\n')
+        .to_string()
+}
+
 fn initialize_result(params: &Value, profile: AcpProfile) -> Value {
     let requested = params
         .get("protocolVersion")
@@ -914,7 +1240,14 @@ fn initialize_result(params: &Value, profile: AcpProfile) -> Value {
             json!({
                 "jcode": {
                     "profile": profile.as_str(),
-                    "extensions": ["raw_server_event"]
+                    "extensions": ["raw_server_event"],
+                    "capabilities": {
+                        "autocomplete": true,
+                        "runSkill": false,
+                        "applyPatch": false,
+                        "memory": false,
+                        "mcp": false
+                    }
                 }
             }),
         );
@@ -1088,10 +1421,93 @@ pub(crate) async fn run_acp_command(
         .await
 }
 
+#[doc(hidden)]
+pub async fn run_autocomplete_request_for_tests(
+    provider: Arc<dyn Provider>,
+    params: Value,
+) -> Result<Value> {
+    let request = autocomplete_request_from_params(&params).map_err(|err| anyhow::anyhow!(err))?;
+    run_autocomplete_request(provider, request)
+        .await
+        .map_err(|err| anyhow::anyhow!("{}: {}", err.common_code, err.message))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::StreamEvent;
+    use crate::provider::EventStream;
+    use async_stream::stream;
     use std::path::Path;
+    use std::time::Duration;
+
+    struct StaticAutocompleteProvider {
+        response: String,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for StaticAutocompleteProvider {
+        async fn complete(
+            &self,
+            _messages: &[crate::message::Message],
+            _tools: &[crate::message::ToolDefinition],
+            _system: &str,
+            _resume_session_id: Option<&str>,
+        ) -> Result<EventStream> {
+            let response = self.response.clone();
+            Ok(Box::pin(stream! {
+                yield Ok(StreamEvent::TextDelta(response));
+                yield Ok(StreamEvent::MessageEnd { stop_reason: Some("end_turn".to_string()) });
+            }))
+        }
+
+        fn name(&self) -> &str {
+            "mock"
+        }
+
+        fn model(&self) -> String {
+            "mock-autocomplete".to_string()
+        }
+
+        fn fork(&self) -> Arc<dyn Provider> {
+            Arc::new(Self {
+                response: self.response.clone(),
+            })
+        }
+    }
+
+    struct SlowAutocompleteProvider {
+        delay: Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for SlowAutocompleteProvider {
+        async fn complete(
+            &self,
+            _messages: &[crate::message::Message],
+            _tools: &[crate::message::ToolDefinition],
+            _system: &str,
+            _resume_session_id: Option<&str>,
+        ) -> Result<EventStream> {
+            let delay = self.delay;
+            Ok(Box::pin(stream! {
+                tokio::time::sleep(delay).await;
+                yield Ok(StreamEvent::TextDelta("late".to_string()));
+            }))
+        }
+
+        fn name(&self) -> &str {
+            "slow"
+        }
+
+        fn model(&self) -> String {
+            "slow-model".to_string()
+        }
+
+        fn fork(&self) -> Arc<dyn Provider> {
+            Arc::new(Self { delay: self.delay })
+        }
+    }
 
     #[test]
     fn acp_tool_kind_maps_core_tools() {
@@ -1146,6 +1562,10 @@ mod tests {
             result["agentCapabilities"]["_meta"]["jcode"]["profile"],
             "full"
         );
+        assert_eq!(
+            result["agentCapabilities"]["_meta"]["jcode"]["capabilities"]["autocomplete"],
+            true
+        );
     }
 
     #[test]
@@ -1187,5 +1607,98 @@ mod tests {
         assert!(cwd_from_params(&params).is_err());
         let params = json!({"cwd": "/tmp"});
         assert_eq!(cwd_from_params(&params).unwrap(), Path::new("/tmp"));
+    }
+
+    #[test]
+    fn autocomplete_request_rejects_inputs_over_limit() {
+        let params = json!({
+            "sessionId": "s1",
+            "document": {
+                "uri": "file:///tmp/app.ts",
+                "languageId": "typescript",
+                "version": 3,
+                "prefix": "abcdef",
+                "suffix": ""
+            },
+            "cursor": { "line": 0, "character": 6 },
+            "limits": {
+                "maxPrefixChars": 3,
+                "maxSuffixChars": 0,
+                "timeoutMs": 1000
+            }
+        });
+        let error = autocomplete_request_from_params(&params).unwrap_err();
+        assert!(error.contains("exceeds limits"));
+    }
+
+    #[test]
+    fn normalize_autocomplete_completion_strips_fences_and_suffix_overlap() {
+        let normalized = normalize_autocomplete_completion("```ts\ngetUser()\n}\n```", "}\n");
+        assert_eq!(normalized, "getUser()\n");
+    }
+
+    #[tokio::test]
+    async fn autocomplete_runtime_returns_structured_completion() {
+        let provider: Arc<dyn Provider> = Arc::new(StaticAutocompleteProvider {
+            response: "getUserById()\n}\n".to_string(),
+        });
+        let response = run_autocomplete_request(
+            provider,
+            autocomplete_request_from_params(&json!({
+                "sessionId": "s1",
+                "document": {
+                    "uri": "file:///tmp/app.ts",
+                    "languageId": "typescript",
+                    "version": 7,
+                    "prefix": "export function gre",
+                    "suffix": "}\n"
+                },
+                "cursor": { "line": 0, "character": 19 },
+                "limits": {
+                    "maxPrefixChars": 4000,
+                    "maxSuffixChars": 1000,
+                    "timeoutMs": 1000
+                }
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response["completion"], "getUserById()\n");
+        assert_eq!(response["finishReason"], "completed");
+        assert_eq!(response["providerEffective"]["providerName"], "mock");
+    }
+
+    #[tokio::test]
+    async fn autocomplete_runtime_maps_timeout_to_common_error_code() {
+        let provider: Arc<dyn Provider> = Arc::new(SlowAutocompleteProvider {
+            delay: Duration::from_millis(25),
+        });
+        let error = run_autocomplete_request(
+            provider,
+            autocomplete_request_from_params(&json!({
+                "sessionId": "s1",
+                "document": {
+                    "uri": "file:///tmp/app.ts",
+                    "languageId": "typescript",
+                    "version": 7,
+                    "prefix": "export function gre",
+                    "suffix": ""
+                },
+                "cursor": { "line": 0, "character": 19 },
+                "limits": {
+                    "maxPrefixChars": 4000,
+                    "maxSuffixChars": 1000,
+                    "timeoutMs": 1
+                }
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.common_code, "AUTOCOMPLETE_TIMEOUT");
+        assert!(error.retryable);
     }
 }

@@ -135,3 +135,32 @@ async fn debug_accept_loop_responds_to_ping_without_affecting_client_count() {
 
     debug_handle.abort();
 }
+
+#[tokio::test]
+async fn debug_accept_loop_returns_state_snapshot() {
+    let _guard = crate::storage::lock_test_env();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let socket_path = temp.path().join("jcode.sock");
+    let debug_socket_path = temp.path().join("jcode-debug.sock");
+    let provider: Arc<dyn Provider> = Arc::new(TestProvider);
+    let server = Server::new_with_paths(provider, socket_path, debug_socket_path.clone());
+    let runtime = ServerRuntime::from_server(&server);
+    let debug_listener = Listener::bind(&debug_socket_path).expect("bind debug socket");
+    let debug_handle = runtime.spawn_debug_accept_loop(debug_listener, std::time::Instant::now());
+
+    let mut client = tokio::time::timeout(
+        Duration::from_secs(1),
+        Client::connect_debug_with_path(debug_socket_path),
+    )
+    .await
+    .expect("debug connect should complete")
+    .expect("debug client should connect");
+
+    let state = client.get_state().await.expect("debug state should succeed");
+    assert!(
+        matches!(state, crate::protocol::ServerEvent::State { .. }),
+        "expected state event, got {state:?}"
+    );
+
+    debug_handle.abort();
+}
